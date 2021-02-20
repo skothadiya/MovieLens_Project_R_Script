@@ -1,0 +1,222 @@
+---
+title: "Capstone Project - MovieLens"
+author: "Shweta Kothadiya"
+date: "2/20/2021"
+output:
+  word_document: default
+  pdf_document: default
+  html_document: default
+---
+Let's install some packages.
+
+```{r}
+if(!require(tidyverse)) install.packages("tidyverse", repos = "http://cran.us.r-project.org")
+if(!require(caret)) install.packages("caret", repos = "http://cran.us.r-project.org")
+if(!require(data.table)) install.packages("data.table", repos = "http://cran.us.r-project.org")
+library(tidyverse)
+library(caret)
+library(data.table)
+```
+
+Now download the data
+```{r}
+dl <- tempfile()
+download.file("http://files.grouplens.org/datasets/movielens/ml-10m.zip", dl)
+ratings <- fread(text = gsub("::", "\t", readLines(unzip(dl, "ml-10M100K/ratings.dat"))),
+                 col.names = c("userId", "movieId", "rating", "timestamp"))
+```
+
+Now let's build the data set
+```{r}
+movies <- str_split_fixed(readLines(unzip(dl, "ml-10M100K/movies.dat")), "\\::", 3)
+colnames(movies) <- c("movieId", "title", "genres")
+```
+```{r}
+movies <- as.data.frame(movies) %>% mutate(movieId =  as.numeric(movieId),
+                                            title = as.character(title),
+                                            genres = as.character(genres))
+```
+```{r}
+movielens <- left_join(ratings, movies, by = "movieId")
+```
+Setting the seed
+```{r}
+set.seed(1, sample.kind="Rounding") 
+```
+Now creating the partition. Validation set will be 10% of MovieLens data.
+```{r}
+test_index <- createDataPartition(y = movielens$rating, times = 1, p = 0.1, list = FALSE)
+```
+Saving training set as edx and test set as temp
+```{r}
+edx <- movielens[-test_index,]
+temp <- movielens[test_index,]
+```
+
+Now, we have to make sure the movieId and userId in validation set are also in edx set.
+```{r}
+validation <- temp %>% 
+      semi_join(edx, by = "movieId") %>%
+      semi_join(edx, by = "userId")
+```
+Add rows removed from validation set back into edx set.
+```{r}
+removed <- anti_join(temp, validation)
+edx <- rbind(edx, removed)
+```
+```{r}
+rm(dl, ratings, movies, test_index, temp, movielens, removed)
+```
+
+Creating RMSE function
+```{r}
+RMSE <- function(true_ratings, predicted_ratings){
+     sqrt(mean((true_ratings - predicted_ratings)^2))
+}
+```
+Creating partition od edx set into train and test set
+```{r}
+partition_edx <- createDataPartition(y = edx$rating, times = 1, p = 0.1, list = FALSE)
+edx_train_set <- edx[-partition_edx,]
+edx_test_set <- edx[partition_edx,]
+```
+Now we have to make sure movieId & userId from edx_test_set is also in edx_train_set.
+```{r}
+edx_test_set_1 <- edx_test_set %>% 
+     semi_join(edx_train_set, by = "movieId") %>%
+     semi_join(edx_train_set, by = "userId")
+```
+Add rows removed from edx_test_set_1 back into edx_train_set
+```{r}
+removed_1 <- anti_join(edx_test_set, edx_test_set_1)
+edx_train_set <- rbind(edx_train_set, removed_1)
+```
+Take mean of ratings from edx_train_set and save it as mu_hat. Show output of mu_hat.
+```{r}
+mu_hat <- mean(edx_train_set$rating)
+mu_hat
+```
+Calculate Naive RMSE on edx_test_set_1 and save it as naive_rmse. Show output of naive_rmse.
+```{r}
+naive_rmse <- RMSE(edx_test_set_1$rating, mu_hat)
+naive_rmse
+```
+We are getting naive_rmse as "1.061135".
+Let's save the naive_rmse in tibble format. Mention the method of calculation and save the results as rmse_results.
+```{r}
+rmse_results <- tibble(method = "Just the average", RMSE = naive_rmse)
+rmse_results
+```
+Take the mean of rating under edx_train_set and save it as mu. 
+```{r}
+mu <- mean(edx_train_set$rating)
+```
+Calculate average of rating based on Movie effect only.
+```{r}
+movie_avgs <- edx_train_set %>% group_by(movieId) %>% summarize(b_i = mean(rating - mu))
+```
+Predict ratings on edx_test_set_1 based on movie_avgs model.
+```{r}
+predicted_ratings <- mu + edx_test_set_1 %>% left_join(movie_avgs, by='movieId') %>%  .$b_i
+```
+Calculate RMSE using with the predicted ratings vs the true ratings under edx_test_set_1.
+```{r}
+model_1_rmse <- RMSE(predicted_ratings, edx_test_set_1$rating)
+```
+Let's save the results of rmse based on Movie effect model into the rmse_results tibble format.  
+```{r}
+rmse_results <- bind_rows(rmse_results, tibble(method="Movie Effect Model", RMSE = model_1_rmse ))
+rmse_results
+```
+The naive_rmse was 1.0611350 but movie effect model is giving us better rmse which is 0.9441568.
+Now, let's build a movie and user effect model to see if we can get better RMSE results.
+```{r}
+user_avgs <- edx_test_set_1 %>% left_join(movie_avgs, by='movieId') %>% group_by(userId) %>% summarize(b_u = mean(rating - mu - b_i))
+```
+Predict ratings based on Movie and User effect model. 
+```{r}
+predicted_ratings <- edx_test_set_1 %>% left_join(movie_avgs, by='movieId') %>% left_join(user_avgs, by='userId') %>% mutate(pred = mu + b_i + b_u) %>% .$pred
+```
+Calculate RMSE using the predicted ratings from Movie plus user effect model vs. true ratings under edx_test_set_1. Save the results as model_2_rmse.
+```{r}
+model_2_rmse <- RMSE(predicted_ratings, edx_test_set_1$rating)
+```
+Save the RMSE results from this Movie and User effect model into our rmse_results. See the rmse_results output.
+```{r}
+rmse_results <- bind_rows(rmse_results, tibble(method="Movie + User Effects Model", RMSE = model_2_rmse ))
+rmse_results
+```
+Movie and User effect combined model is giving better RMSE which is "0.8262583" than using only the Movie model. 
+Now, let's build Movie plus Genre effect model and we will see if that make's any difference.
+```{r}
+genre_avgs <- edx_test_set_1 %>% left_join(movie_avgs, by='movieId') %>% group_by(genres) %>% summarize(b_g = mean(rating - mu - b_i))
+```
+Predict ratings using this Movie plus Genre effect model.
+```{r}
+predicted_ratings <- edx_test_set_1 %>% left_join(movie_avgs, by='movieId') %>% left_join(genre_avgs, by='genres') %>% mutate(pred = mu + b_i + b_g) %>% .$pred
+```
+Calculate RMSE using the predicted ratings from Movie plus Genre effect model vs. true ratings of edx_test_set_1. Save the results as model_3_rmse.
+```{r}
+model_3_rmse <- RMSE(predicted_ratings, edx_test_set_1$rating)
+```
+Save the RMSE results based on Movie plus Genre model which is under model_3_rmse into rmse_results. Show the rmse_results output. 
+```{r}
+rmse_results <- bind_rows(rmse_results, tibble(method="Movie + Genre Effects Model", RMSE = model_3_rmse ))
+rmse_results
+```
+"Movie plus Genre Effects Model" is giving RMSE as "0.9436908" which is better than just the naive_rmse and "Movie Effect Model" but not better than the "Movie plus User Effects Model".
+Let's calculate Genre plus User model. 
+```{r}
+genre_avgs_with_user <- edx_test_set_1 %>% left_join(user_avgs, by='userId') %>%group_by(genres)%>%summarize(b_g_u = mean(rating-mu-b_u))
+```
+Predict ratings using this Genre plus User effect model.
+```{r}
+predicted_ratings <- edx_test_set_1 %>% left_join(user_avgs, by='userId') %>% left_join(genre_avgs_with_user, by='genres') %>% mutate(pred = mu + b_u + b_g_u) %>% .$pred
+```
+Calculate RMSE using the predicted ratings from Genre plus User effect model vs. true ratings of edx_test_set_1. Save the results as model_4_rmse.
+```{r}
+model_4_rmse <- RMSE(predicted_ratings, edx_test_set_1$rating)
+```
+Save the RMSE results based on Genre plus User effect model which is under model_4_rmse into rmse_results. Show the rmse_results output. 
+```{r}
+rmse_results <- bind_rows(rmse_results, tibble(method="User + Genre Effects Model", RMSE = model_4_rmse))
+rmse_results
+```
+We can see that "User plus Genre Effects Model" is giving RMSE as "0.9112458", which is better than any RMSE that has been calculated EXCEPT "Movie plus User Effects Model" which has the lowest RMSE that is "0.8262583". 
+Now, let's calculate another model which is "Movie plus User plus Genre Model".
+```{r}
+genre_avgs_with_Movie_User <- edx_test_set_1 %>% left_join(movie_avgs, by='movieId') %>% left_join(user_avgs, by='userId') %>% group_by(genres) %>% summarize(b_g_m_u = mean(rating-mu-b_i-b_u))
+```
+Predict ratings using this Movie plus User plus Genre Effects Model.
+```{r}
+predicted_ratings <- edx_test_set_1 %>% left_join(movie_avgs, by='movieId') %>% left_join(user_avgs, by='userId') %>% left_join(genre_avgs_with_Movie_User, by='genres') %>% mutate(pred = mu + b_i + b_u + b_g_m_u) %>% .$pred
+```
+Calculate RMSE using the predicted ratings from Movie plus User plus Genre Effect Model vs. true ratings of edx_test_set_1. Save the results as model_5_rmse.
+```{r}
+model_5_rmse <- RMSE(predicted_ratings, edx_test_set_1$rating)
+```
+Save the RMSE results based on Movie plus User plus Genre Effects Model which is under model_5_rmse into rmse_results. Show the rmse_results output. 
+```{r}
+rmse_results <- bind_rows(rmse_results, tibble(method="Movie + User + Genre Effects Model", RMSE = model_5_rmse))
+rmse_results
+```
+We can see that combined model which is "Movie plus User plus Genre Effects Model" is giving the RMSE as "0.8255252" which is lowest of all the models that we have calculated so far; however if we look at the Only 3 digits decimal after "0.", then this "Movie plus User plus Genre Effects Model" would have RMSE as 0.826 which is the same RMSE that we have calculated for "Movie plus User Effects Model" which is 0.826.
+Based on the above calculations, I think we can use "Movie plus User Effects Model" on the Validation set now.   
+```{r}
+user_avgs_validation <- validation %>% left_join(movie_avgs, by='movieId') %>% group_by(userId) %>% summarize(b_u = mean(rating - mu - b_i))
+```
+Let's predict the ratings on Validation set.
+```{r}
+predicted_ratings_validation <- validation %>% left_join(movie_avgs, by='movieId') %>% left_join(user_avgs_validation, by='userId') %>% mutate(pred = mu + b_i + b_u) %>% .$pred
+```
+Let's calculate RMSE using "predicted_ratings_validation" vs. true ratings under validation set.
+```{r}
+validation_rmse <- RMSE(predicted_ratings_validation, validation$rating)
+```
+Return the "validation_rmse" to show the RMSE output on validation set.
+```{r}
+validation_rmse
+```
+
+
+
